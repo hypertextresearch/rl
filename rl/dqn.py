@@ -16,7 +16,7 @@ Source:
 from gym import spaces
 from functools import reduce
 from .utils.replay import ReplayBuffer
-from .utils.metrics import MovingAverage
+from .utils.metrics import ValueHistory
 
 import random
 import copy
@@ -174,7 +174,7 @@ class DQN(object):
                 self._freeze_weights(self.target_model)
                 
                 print(f"[ep {ep}] return={ep_return}, "
-                      f"avg_return={self.return_moving_avg.value()}")
+                      f"avg_return={self.return_history.mean()}")
             
             if post_episode_hook is not None:
                 post_episode_hook(self, locals())
