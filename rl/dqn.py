@@ -22,11 +22,13 @@ import random
 import copy
 
 import torch
-from torch.nn.utils import clip_grad_norm_
+import torch.nn.functional as F
+from torch.nn.utils import clip_grad_value_
 
 class DQN(object):
     
-    def __init__(self, env, model_fn, opt_cls, opt_config):
+    def __init__(self, env, model_fn, opt_cls, opt_config, device="cuda"):
+        self.device = device
         self.env = env
         
         if not isinstance(self.env.action_space, spaces.Discrete):
@@ -40,9 +42,9 @@ class DQN(object):
         print(f"[env]: num_actions={self.num_actions}")
         print(f"[env]: obs_dim={self.obs_dim}")
         
-        self.model = model_fn(self.obs_dim, self.num_actions)
+        self.model = model_fn(self.obs_dim, self.num_actions).to(self.device)
         
-        self.target_model = model_fn(self.obs_dim, self.num_actions)
+        self.target_model = model_fn(self.obs_dim, self.num_actions).to(self.device)
         self.target_model.load_state_dict(self.model.state_dict())
         self._freeze_weights(self.target_model)
         
@@ -58,11 +60,11 @@ class DQN(object):
     def _reshape(self, replay):
         obs, actions, rewards, done, next_obs = list(zip(*replay))
         
-        obs = torch.tensor(obs, dtype=torch.float32)
-        actions = torch.tensor(actions, dtype=torch.int64)
-        rewards = torch.tensor(rewards, dtype=torch.float32)
-        done = torch.tensor(done, dtype=torch.float32)
-        next_obs = torch.tensor(next_obs, dtype=torch.float32)
+        obs = torch.tensor(obs, dtype=torch.float32).to(self.device)
+        actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
+        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
+        done = torch.tensor(done, dtype=torch.float32).to(self.device)
+        next_obs = torch.tensor(next_obs, dtype=torch.float32).to(self.device)
         
         return obs, actions, rewards, done, next_obs
         
@@ -72,22 +74,23 @@ class DQN(object):
               batch_size=128,
               discount_factor=0.999,
               epsilon_fn=lambda ep: 0.90 * (2 ** (-ep / 50)) + 0.05,
-              replay_buffer_size=10000,
-              episodes_target_update=5,
-              num_episodes=5000,
-              track_average=100,
-              pretrain_hook=None,
-              posttrain_hook=None):
+              replay_buffer_size=1000000,
+              episodes_target_update=10,
+              num_episodes=1000,
+              track_length=100,
+              pre_train_hook=None,
+              post_train_hook=None,
+              post_episode_hook=None):
         """
         Args:
           - num_episodes (int):
           - track_average (int):
-          - pretrain_hook (Function):
-          - posttrain_hook (Function):
+          - pre_train_hook (Function):
+          - post_train_hook (Function):
         """
         
         self.replay_buffer = ReplayBuffer(replay_buffer_size)
-        self.return_moving_avg = MovingAverage(track_average)
+        self.return_history = ValueHistory(track_length)
         
         # total number of steps taken
         steps = 0
@@ -109,7 +112,7 @@ class DQN(object):
                             torch.tensor(
                                 [obs],
                                 dtype=torch.float32
-                            )) 
+                            ).to(self.device))
 
                         # get the best action for the first entry in the batch
                         # (there is only 1 element in the batch)
@@ -139,10 +142,8 @@ class DQN(object):
                     if steps < steps_warmup:
                         print(f"[opt][step {steps}], still warming up.")
                     else:
-                        self.optimizer.zero_grad()
-                        
-                        if pretrain_hook is not None:
-                            pretrain_hook(self, locals())
+                        if pre_train_hook is not None:
+                            pre_train_hook(self, locals())
 
                         replay = self.replay_buffer.sample(batch_size)
                         b_obs, b_acts, b_rwds, b_done, b_next_obs = self._reshape(replay)
@@ -155,17 +156,17 @@ class DQN(object):
                         q_est = self.model(b_obs)
                         q_est_indexed = torch.gather(q_est, 1, b_acts.unsqueeze(1))
 
-                        loss = torch.mean((td_target - q_est_indexed) ** 2)
+                        loss = F.smooth_l1_loss(td_target.unsqueeze(1), q_est_indexed)
+                        
+                        self.optimizer.zero_grad()
                         loss.backward()
-                        
-                        clip_grad_norm_(self.model.parameters(), 1.0)
-                        
+                        # clip_grad_value_(self.model.parameters(), 1.0)
                         self.optimizer.step()
 
-                        if posttrain_hook is not None:
-                            posttrain_hook(self, locals())
+                        if post_train_hook is not None:
+                            post_train_hook(self, locals())
             
-            self.return_moving_avg.push(ep_return)
+            self.return_history.push(ep_return)
                         
             if (ep + 1) % episodes_target_update == 0:
                 # update the target network
@@ -174,5 +175,9 @@ class DQN(object):
                 
                 print(f"[ep {ep}] return={ep_return}, "
                       f"avg_return={self.return_moving_avg.value()}")
+            
+            if post_episode_hook is not None:
+                post_episode_hook(self, locals())
+                
                         
                     
