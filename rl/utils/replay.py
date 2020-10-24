@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import copy
+import random
 
 from collections import deque
 
@@ -15,3 +16,5 @@ class ReplayBuffer(object):
     
     def sample(self, size):
         items = random.sample(self.buffer, size)
+        
+        return items
