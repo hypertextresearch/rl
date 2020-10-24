@@ -23,7 +23,7 @@ import copy
 
 import torch
 import torch.nn.functional as F
-from torch.nn.utils import clip_grad_value_
+from torch.nn.utils import clip_grad_value_, clip_grad_norm_
 
 class DQN(object):
     
@@ -160,7 +160,7 @@ class DQN(object):
                         
                         self.optimizer.zero_grad()
                         loss.backward()
-                        # clip_grad_value_(self.model.parameters(), 1.0)
+                        clip_grad_norm_(self.model.parameters(), 1.0)
                         self.optimizer.step()
 
                         if post_train_hook is not None:
